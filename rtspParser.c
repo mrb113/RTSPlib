@@ -2,53 +2,43 @@
 #define TEST_REQUEST "DESCRIBE rtsp://example.com/media.mp4 RTSP/1.0\r\nCSeq : 2"
 #define TEST_RESPONSE "RTSP/1.0 200 OK\r\nCSeq: 5\r\nCSeq: 7\r\nSession : 12345678"
 
-struct _RTSP_MESSAGE parseRTSPRequest(char *rtspMessage) {
-	struct _RTSP_MESSAGE msg; 
-	char *protocol, *statusStr, *token, *target, *command, flag;
+//  
+int parseRTSPRequest(struct _RTSP_MESSAGE *msg, char *rtspMessage) {
+	char *token, *protocol, *target, *statusStr, *command, flag;
 	int statusCode;
-	OPTION_ITEM *options = (OPTION_ITEM*)calloc(1, sizeof(OPTION_ITEM)); 
-	if (!options){
-		// TODO calloc failed, SOS
-		// HELP speaking of, how should I handle exceptions? the rest of ll common c uses Limelog
-	} 
-	/* Tokenize the message string */
-	// HELP the static ugly arrays are just sort of what I put as I was figuring out how things worked, how to make them die? 
-	char message[RTSP_MAX_SIZE]; 
-	strcpy(message, rtspMessage);
-	char delim[] = " \r\n";
-	char end[] = "\r\n"; 
-	char optDelim[] = " :\r\n";
-	 
-	if ((token = strtok(message, delim)) == NULL){
-		// TODO all is lost
+	OPTION_ITEM *options = (OPTION_ITEM*)calloc(1, sizeof(OPTION_ITEM)); 	
+	char *message = malloc((strlen(rtspMessage) + 1) * sizeof(*rtspMessage));
+	if (options == NULL || message == NULL){
+		goto ExitFailure;
 	}
-	char *first = token;
+	/* Tokenize the message string */
+	strcpy(message, rtspMessage);
+	char* delim = " \r\n";
+	char* end = "\r\n"; 
+	char* optDelim = " :\r\n";
+	 
+	token = strtok(message, delim);
 
 	/* The message is a response */
 	if (startsWith(message, "RTSP")){
 		flag = TYPE_RESPONSE; 
-		protocol = first;
-
-		if((token = strtok(NULL, delim)) == NULL){
-			// TODO Abort mission something is wrong
-		}
+		protocol = token;
+		token = strtok(NULL, delim); 
 		statusCode = atoi(token);
+		statusStr = strtok(NULL, end);
 
-		if ((statusStr = strtok(NULL, end)) == NULL){
-			// TODO Abort mission something is wrong
-		}
+		command = NULL; 
+		target = NULL; 
 	}
 
 	/* The message is a request */
 	else {		
 		flag = TYPE_REQUEST; 
-		command = first;
-		if ((target = strtok(NULL, delim)) == NULL){
-			// TODO Abort mission something is wrong
-		}		
-		if ((protocol = strtok(NULL, delim)) == NULL){
-			// TODO Abort mission something is wrong
-		}
+		command = token; 
+		target = strtok(NULL, delim);
+		protocol = strtok(NULL, delim);
+
+		statusStr = NULL; 
 	}
 
 	if (strcmp(protocol, "RTSP/1.0")){
@@ -57,66 +47,135 @@ struct _RTSP_MESSAGE parseRTSPRequest(char *rtspMessage) {
 
 	/* Parse remaining options */
 	char typeFlag = 0; // 0 for option, 1 for content
+	char *content, *opt = malloc((strlen(message) + 1) * sizeof(*message));
 	while (token != NULL){
 		token = strtok(NULL, optDelim);
-		char *opt, *content; 
-
-		if (token != NULL){			
+		if (token != NULL){
 			if (typeFlag == 0){ // Option
-				opt = token;
-			} else { // Content
-				content = token; 
+				strcpy(opt, token);
+			}
+			else { // Content
+				content = token;
 				// ship off the node
-				OPTION_ITEM *newOpt = (OPTION_ITEM*)malloc(sizeof(OPTION_ITEM)); // HELP need to free this. help how do I linked list in C
-				if (!newOpt){
-					// TODO malloc failed, SOS
+				OPTION_ITEM *newOpt = (OPTION_ITEM*)malloc(sizeof(OPTION_ITEM));
+				if (newOpt == NULL){
+					// TODO  
 				}
-				strcpy(newOpt->content, content);
+				newOpt->option = malloc((strlen(opt) + 1) * sizeof(*opt));
+				if (newOpt->option == NULL){
+					// TODO 
+				}
+				newOpt->content = malloc((strlen(content) + 1) * sizeof(*content));
+				if (newOpt->content == NULL){
+					// TODO 
+				}
 				strcpy(newOpt->option, opt);
-				newOpt->next = NULL; 
-				insertOption(options, newOpt);
-			}			
+				strcpy(newOpt->content, content);
+				newOpt->next = NULL;
+				insertOption(options, newOpt);		
+			}
 		}
 		typeFlag ^= 1; // flip the flag
 	}
 	char *sequence = getOptionContent(options, "CSeq"); // Get the sequence #
+	if (sequence == NULL){
+		goto ExitFailure; 
+	}
 	int sequenceNum = atoi(sequence);
-
 	/* Package the new parsed message */
 	if (flag == TYPE_REQUEST){
-		msg = createRtspRequest(command, target, protocol, sequenceNum, options, 0);
+		createRtspRequest(msg, command, target, protocol, sequenceNum, options);
 	}
 	else {
-		msg = createRtspResponse(protocol, statusCode, statusStr, sequenceNum, options, 0);
+		createRtspResponse(msg, protocol, statusCode, statusStr, sequenceNum, options);
 	}
-	return msg;
+	return 1;
+
+ExitFailure:
+	if (options) {
+		free(options);
+	}
+	if (message) {
+		free(message);
+	}
+	return 0;
 }
 
 /* Create new RTSP message struct with response data */
-struct _RTSP_MESSAGE createRtspResponse(char *protocol, int statusCode, char *statusString, int sequenceNumber, OPTION_ITEM *options, char *payload){
-	struct _RTSP_MESSAGE msg;
-	msg.type = TYPE_RESPONSE; 
-	msg.options = options; 
-	msg.payload = payload; 
-	msg.protocol = protocol; 
-	msg.sequenceNumber = sequenceNumber; 
-	msg.statusCode = statusCode;
-	msg.statusString = statusString;
-	return msg; 
+int createRtspResponse(struct _RTSP_MESSAGE *msg, char *protocol, int statusCode, char *statusString, int sequenceNumber, OPTION_ITEM *options){
+	
+	msg->protocol = malloc((strlen(protocol) + 1) * sizeof(*protocol));
+	if (msg->protocol == NULL) {
+		goto ExitFailure;
+	}
+	msg->statusString = malloc((strlen(statusString) + 1) * sizeof(*statusString));
+	if (msg->statusString == NULL) {
+		goto ExitFailure;
+	}
+	msg->options = (OPTION_ITEM*)malloc(sizeof(*options));
+	if (msg->options == NULL) {
+		goto ExitFailure;
+	}
+	strcpy(msg->protocol, protocol);	
+	msg->type = TYPE_RESPONSE; 
+	msg->options = options;
+	msg->sequenceNumber = sequenceNumber; 
+	msg->statusCode = statusCode;
+	strcpy(msg->statusString, statusString);
+
+	return 1;
+
+ExitFailure:
+	if (msg->protocol) {
+		free(msg->protocol);
+	}
+
+	return 0;
 }
 
 /* Create new RTSP message struct with request data */
-// TODO silly Michelle, you don't return structs in C! 
-struct _RTSP_MESSAGE createRtspRequest(char *command, char *target, char *protocol, int sequenceNumber, OPTION_ITEM *options, char *payload){
-	struct _RTSP_MESSAGE msg;
-	msg.command = command;
-	msg.type = TYPE_REQUEST;
-	msg.options = options;
-	msg.payload = payload;
-	msg.protocol = protocol;
-	msg.sequenceNumber = sequenceNumber;
-	msg.target = target;
-	return msg; 
+int createRtspRequest(struct _RTSP_MESSAGE *msg, char *command, char *target, char *protocol, int sequenceNumber, OPTION_ITEM *options){
+	msg->protocol = malloc((strlen(protocol) + 1) * sizeof(*protocol));
+	if (msg->protocol == NULL) {
+		goto ExitFailure;
+	}
+	msg->command = malloc((strlen(command) + 1) * sizeof(*command));
+	if (msg->command == NULL) {
+		goto ExitFailure;
+	}
+	msg->target = malloc((strlen(target) + 1) * sizeof(*target));
+	if (msg->target == NULL) {
+		goto ExitFailure;
+	}
+	msg->options = (OPTION_ITEM*)malloc(sizeof(*options));
+	if (msg->options == NULL) {
+		goto ExitFailure;
+	}
+
+	strcpy(msg->command, command);
+	msg->type = TYPE_REQUEST;
+	msg->options = options;
+	strcpy(msg->protocol, protocol);
+	msg->sequenceNumber = sequenceNumber;
+	strcpy(msg->target, target);
+
+	return 1; 
+
+ExitFailure:
+	if (msg->protocol) {
+		free(msg->protocol);
+	}
+	if (msg->command) {
+		free(msg->command);
+	}
+	if (msg->target) {
+		free(msg->target);
+	}
+	if (msg->options) {
+		free(msg->options);
+	}
+
+	return 0;
 }
 
 /* Retrieves option content from the linked list given the option title */
@@ -132,8 +191,16 @@ char *getOptionContent(OPTION_ITEM *list, char *option){
 }
 
 /* Adds new option to the struct's option list */
-void insertOption(OPTION_ITEM *head, OPTION_ITEM *opt){ // HELP is this what you wanted for the linked list without the jank empty head? If not, you'll need to clarify more.
-	if (strlen(head->option) == 0){
+void insertOption(OPTION_ITEM *head, OPTION_ITEM *opt){ 
+	if (head->option == NULL){
+		head->option = malloc((strlen(opt->option) + 1) * sizeof(*opt->option));
+		if (head->option == NULL){
+			// TODO failure
+		}
+		head->content = malloc((strlen(opt->content) + 1) * sizeof(*opt->content));
+		if (head->content == NULL){
+			// TODO failure
+		}
 		strcpy(head->option, opt->option);
 		strcpy(head->content, opt->content);
 		head->next = NULL; 
@@ -145,7 +212,7 @@ void insertOption(OPTION_ITEM *head, OPTION_ITEM *opt){ // HELP is this what you
 			strcpy(current->content, opt->content);
 			return; // Duplicate option found
 		}
-		if (!current->next){
+		if (current->next == NULL){
 			current->next = opt;
 			return; 
 		}
@@ -154,17 +221,18 @@ void insertOption(OPTION_ITEM *head, OPTION_ITEM *opt){ // HELP is this what you
 }
 
 /* Check if String s begins with the given prefix */
-bool startsWith(const char *s, const char *prefix) {
+int startsWith(const char *s, const char *prefix) {
 	if (strncmp(s, prefix, strlen(prefix)) == 0){
 		return 1; 
 	}
 	else {
-		return 0; 
+		return 0;
 	}
 }
 
 int main() {
-	parseRTSPRequest(TEST_RESPONSE);
+	struct _RTSP_MESSAGE msg;
+	parseRTSPRequest(&msg, TEST_REQUEST);
 	printf("Done");
 	getchar(0);
 }
