@@ -6,37 +6,57 @@
 #define TYPE_REQUEST 0
 #define TYPE_RESPONSE 1
 
+#define RTSP_ERROR_SUCCESS 0
+#define RTSP_ERROR_NO_MEMORY -1
+#define RTSP_ERROR_MALFORMED -2
+
+#define SEQ_INVALID -1
+
+#define FLAG_ALLOCATED_OPTION_FIELDS 0x1
+#define FLAG_ALLOCATED_MESSAGE 0x2
+#define FLAG_ALLOCATED_OPTION_ITEMS 0x4
+
 /* Linked List to store the options */
-typedef struct _OPTIONS_LIST {
-	char *option; 
+typedef struct _OPTION_ITEM {
+	char flags;
+	char *option;
 	char *content; 
-	struct _OPTIONS_LIST *next; 
-} OPTION_ITEM;
+	struct _OPTION_ITEM *next; 
+} OPTION_ITEM, *POPTION_ITEM;
 
 /* RTSP Message *
 * In this implementation, a flag indicates the message type:
 * 0 = request
 * 1 = response */
-struct _RTSP_MESSAGE { // TODO the workers must unionize (that is, make a union)
+typedef struct _RTSP_MESSAGE {
 	char type;
+	char flags;
 	int sequenceNumber;
 	char *protocol;
-	OPTION_ITEM *options;
+	POPTION_ITEM options;
 
-	// Request fields
-	char *command;
-	char *target;
+	char* messageBuffer;
 
-	// Response fields
-	char *payload;
-	char *statusString;
-	int statusCode;
-};
+	union {
+		struct {
+			// Request fields
+			char *command;
+			char *target;
+		} request;
+		struct {
+			// Response fields
+			char *payload;
+			char *statusString;
+			int statusCode;
+		} response;
+	} message;
+} RTSP_MESSAGE, *PRTSP_MESSAGE;
 
-int parseRTSPRequest(struct _RTSP_MESSAGE *msg, char *rtspMessage);
-int createRtspResponse(struct _RTSP_MESSAGE *msg, char *protocol, int statusCode, char *statusString, int sequenceNumber, OPTION_ITEM *options);
-int createRtspRequest(struct _RTSP_MESSAGE *msg, char *command, char *target, char *protocol, int sequenceNumber, OPTION_ITEM *options);
-char * getOptionContent(OPTION_ITEM *list, char option);
-char *generatePayload(OPTION_ITEM *options);
-int startsWith(const char *s, const char *prefix);
-void insertOption(OPTION_ITEM *head, OPTION_ITEM *opt);
+int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage);
+void freeMessage(PRTSP_MESSAGE msg);
+void createRtspResponse(PRTSP_MESSAGE msg, char* message, int flags, char *protocol, int statusCode, char *statusString, int sequenceNumber, POPTION_ITEM optionsHead);
+void createRtspRequest(PRTSP_MESSAGE msg, char* message, int flags, char *command, char *target, char *protocol, int sequenceNumber, POPTION_ITEM optionsHead);
+char *getOptionContent(POPTION_ITEM optionsHead, char option);
+void insertOption(POPTION_ITEM *optionsHead, POPTION_ITEM opt);
+void freeOptionList(POPTION_ITEM optionsHead);
+char *serializeRtspMessage(PRTSP_MESSAGE msg);

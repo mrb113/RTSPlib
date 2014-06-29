@@ -2,13 +2,54 @@
 #define TEST_REQUEST "DESCRIBE rtsp://example.com/media.mp4 RTSP/1.0\r\nCSeq : 2"
 #define TEST_RESPONSE "RTSP/1.0 200 OK\r\nCSeq: 5\r\nCSeq: 7\r\nSession : 12345678"
 
-//  
-int parseRTSPRequest(struct _RTSP_MESSAGE *msg, char *rtspMessage) {
+/* Check if String s begins with the given prefix */
+static int startsWith(const char *s, const char *prefix) {
+	if (strncmp(s, prefix, strlen(prefix)) == 0){
+		return 1;
+	}
+	else {
+		return 0;
+	}
+}
+
+/* Gets the length of the message */
+static int getMessageLength(PRTSP_MESSAGE msg){
+	int count = 1; 
+	count += strlen(msg->protocol);
+	if (msg->type == TYPE_REQUEST){
+		count += strlen(msg->message.request.command);
+		count += strlen(msg->message.request.target);
+		/* Add 2 for the two spaces */
+		count += 2;
+	}
+	else {
+		char *statusCodeStr = malloc(sizeof(int));
+		sprintf(statusCodeStr, "%d", msg->message.response.statusCode);
+		count += strlen(statusCodeStr);
+		count += strlen(msg->message.response.statusString);
+		/* Two spaces and \r\n */
+		count += 4; 
+	}
+
+	POPTION_ITEM current = msg->options; 
+	while (current != NULL){
+		count += strlen(msg->options->option);
+		count += strlen(msg->options->content);
+		/* Add 4 because of : and \r\n */
+		count += 4; 
+		current = current->next; 
+	}
+	return count; 
+}
+
+int parseRTSPRequest(PRTSP_MESSAGE msg, char *rtspMessage) {
 	char *token, *protocol, *target, *statusStr, *command, flag;
 	int statusCode;
-	OPTION_ITEM *options = (OPTION_ITEM*)calloc(1, sizeof(OPTION_ITEM)); 	
+	int exitCode;
+	POPTION_ITEM options = NULL;
 	char *message = malloc((strlen(rtspMessage) + 1) * sizeof(*rtspMessage));
-	if (options == NULL || message == NULL){
+	if (message == NULL) {
+		exitCode = RTSP_ERROR_NO_MEMORY;
 		goto ExitFailure;
 	}
 	/* Tokenize the message string */
@@ -20,17 +61,20 @@ int parseRTSPRequest(struct _RTSP_MESSAGE *msg, char *rtspMessage) {
 	token = strtok(message, delim);
 
 	/* The message is a response */
-	if (startsWith(message, "RTSP")){
+	if (startsWith(token, "RTSP")){
 		flag = TYPE_RESPONSE; 
 		protocol = token;
+
+		/* Get the status code */
 		token = strtok(NULL, delim); 
 		statusCode = atoi(token);
+
+		/* Get the status string */
 		statusStr = strtok(NULL, end);
 
+		target = NULL;
 		command = NULL; 
-		target = NULL; 
 	}
-
 	/* The message is a request */
 	else {		
 		flag = TYPE_REQUEST; 
@@ -42,54 +86,54 @@ int parseRTSPRequest(struct _RTSP_MESSAGE *msg, char *rtspMessage) {
 	}
 
 	if (strcmp(protocol, "RTSP/1.0")){
-		// TODO Invalid protocol
+		exitCode = RTSP_ERROR_MALFORMED; 
+		goto ExitFailure; 
 	}
 
 	/* Parse remaining options */
-	char typeFlag = 0; // 0 for option, 1 for content
-	char *content, *opt = malloc((strlen(message) + 1) * sizeof(*message));
+	char typeFlag = 0x0; // 0 for option, 1 for content
+	char *content, *opt = NULL;
 	while (token != NULL){
 		token = strtok(NULL, optDelim);
 		if (token != NULL){
 			if (typeFlag == 0){ // Option
-				strcpy(opt, token);
+				opt = token;
 			}
 			else { // Content
 				content = token;
 				// ship off the node
 				OPTION_ITEM *newOpt = (OPTION_ITEM*)malloc(sizeof(OPTION_ITEM));
 				if (newOpt == NULL){
-					// TODO  
+					freeOptionList(options);
+					exitCode = RTSP_ERROR_NO_MEMORY;
+					goto ExitFailure;
 				}
-				newOpt->option = malloc((strlen(opt) + 1) * sizeof(*opt));
-				if (newOpt->option == NULL){
-					// TODO 
-				}
-				newOpt->content = malloc((strlen(content) + 1) * sizeof(*content));
-				if (newOpt->content == NULL){
-					// TODO 
-				}
-				strcpy(newOpt->option, opt);
-				strcpy(newOpt->content, content);
+				newOpt->flags = 0;
+				newOpt->option = opt;
+				newOpt->content = token;
 				newOpt->next = NULL;
-				insertOption(options, newOpt);		
+				insertOption(&options, newOpt);		
 			}
 		}
-		typeFlag ^= 1; // flip the flag
+		typeFlag ^= 0x1; // flip the flag
 	}
+	int sequenceNum;
 	char *sequence = getOptionContent(options, "CSeq"); // Get the sequence #
-	if (sequence == NULL){
-		goto ExitFailure; 
-	}
-	int sequenceNum = atoi(sequence);
-	/* Package the new parsed message */
-	if (flag == TYPE_REQUEST){
-		createRtspRequest(msg, command, target, protocol, sequenceNum, options);
+	if (sequence != NULL) {
+		sequenceNum = atoi(sequence);
 	}
 	else {
-		createRtspResponse(msg, protocol, statusCode, statusStr, sequenceNum, options);
+		sequenceNum = SEQ_INVALID;
 	}
-	return 1;
+	/* Package the new parsed message */
+	if (flag == TYPE_REQUEST){
+		createRtspRequest(msg, message, FLAG_ALLOCATED_MESSAGE | FLAG_ALLOCATED_OPTION_ITEMS, command, target, protocol, sequenceNum, options);
+	}
+	else {
+		createRtspResponse(msg, message, FLAG_ALLOCATED_MESSAGE | FLAG_ALLOCATED_OPTION_ITEMS, protocol, statusCode, statusStr, sequenceNum, options);
+	}
+	puts(serializeRtspMessage(msg)); 
+	return RTSP_ERROR_SUCCESS;
 
 ExitFailure:
 	if (options) {
@@ -98,89 +142,39 @@ ExitFailure:
 	if (message) {
 		free(message);
 	}
-	return 0;
+	return exitCode;
 }
 
 /* Create new RTSP message struct with response data */
-int createRtspResponse(struct _RTSP_MESSAGE *msg, char *protocol, int statusCode, char *statusString, int sequenceNumber, OPTION_ITEM *options){
+void createRtspResponse(PRTSP_MESSAGE msg, char *message, int flags, char *protocol, 
+	int statusCode, char *statusString, int sequenceNumber, POPTION_ITEM optionsHead) {
 	
-	msg->protocol = malloc((strlen(protocol) + 1) * sizeof(*protocol));
-	if (msg->protocol == NULL) {
-		goto ExitFailure;
-	}
-	msg->statusString = malloc((strlen(statusString) + 1) * sizeof(*statusString));
-	if (msg->statusString == NULL) {
-		goto ExitFailure;
-	}
-	msg->options = (OPTION_ITEM*)malloc(sizeof(*options));
-	if (msg->options == NULL) {
-		goto ExitFailure;
-	}
-	strcpy(msg->protocol, protocol);	
-	msg->type = TYPE_RESPONSE; 
-	msg->options = options;
-	msg->sequenceNumber = sequenceNumber; 
-	msg->statusCode = statusCode;
-	strcpy(msg->statusString, statusString);
-
-	return 1;
-
-ExitFailure:
-	if (msg->protocol) {
-		free(msg->protocol);
-	}
-
-	return 0;
+	msg->type = TYPE_RESPONSE;
+	msg->flags = flags;
+	msg->messageBuffer = message;
+	msg->protocol = protocol;
+	msg->options = optionsHead;
+	msg->sequenceNumber = sequenceNumber;
+	msg->message.response.statusString = statusString;
+	msg->message.response.statusCode = statusCode;
 }
 
 /* Create new RTSP message struct with request data */
-int createRtspRequest(struct _RTSP_MESSAGE *msg, char *command, char *target, char *protocol, int sequenceNumber, OPTION_ITEM *options){
-	msg->protocol = malloc((strlen(protocol) + 1) * sizeof(*protocol));
-	if (msg->protocol == NULL) {
-		goto ExitFailure;
-	}
-	msg->command = malloc((strlen(command) + 1) * sizeof(*command));
-	if (msg->command == NULL) {
-		goto ExitFailure;
-	}
-	msg->target = malloc((strlen(target) + 1) * sizeof(*target));
-	if (msg->target == NULL) {
-		goto ExitFailure;
-	}
-	msg->options = (OPTION_ITEM*)malloc(sizeof(*options));
-	if (msg->options == NULL) {
-		goto ExitFailure;
-	}
-
-	strcpy(msg->command, command);
+void createRtspRequest(PRTSP_MESSAGE msg, char *message, int flags, 
+	char *command, char *target, char *protocol, int sequenceNumber, POPTION_ITEM optionsHead) {
 	msg->type = TYPE_REQUEST;
-	msg->options = options;
-	strcpy(msg->protocol, protocol);
+	msg->flags = flags;
+	msg->protocol = protocol; 
+	msg->messageBuffer = message;
+	msg->options = optionsHead;
 	msg->sequenceNumber = sequenceNumber;
-	strcpy(msg->target, target);
-
-	return 1; 
-
-ExitFailure:
-	if (msg->protocol) {
-		free(msg->protocol);
-	}
-	if (msg->command) {
-		free(msg->command);
-	}
-	if (msg->target) {
-		free(msg->target);
-	}
-	if (msg->options) {
-		free(msg->options);
-	}
-
-	return 0;
+	msg->message.request.command = command; 
+	msg->message.request.target = target;
 }
 
 /* Retrieves option content from the linked list given the option title */
-char *getOptionContent(OPTION_ITEM *list, char *option){
-	OPTION_ITEM *current = list;
+char *getOptionContent(POPTION_ITEM optionsHead, char *option){
+	OPTION_ITEM *current = optionsHead;
 	while (current != NULL){
 		if (!strcmp(current->option, option)){
 			return current->content; 
@@ -190,49 +184,87 @@ char *getOptionContent(OPTION_ITEM *list, char *option){
 	return NULL;
 }
 
-/* Adds new option to the struct's option list */
-void insertOption(OPTION_ITEM *head, OPTION_ITEM *opt){ 
-	if (head->option == NULL){
-		head->option = malloc((strlen(opt->option) + 1) * sizeof(*opt->option));
-		if (head->option == NULL){
-			// TODO failure
-		}
-		head->content = malloc((strlen(opt->content) + 1) * sizeof(*opt->content));
-		if (head->content == NULL){
-			// TODO failure
-		}
-		strcpy(head->option, opt->option);
-		strcpy(head->content, opt->content);
-		head->next = NULL; 
+/* Adds new option opt to the struct's option list */
+void insertOption(POPTION_ITEM *optionsHead, POPTION_ITEM opt){
+	opt->next = NULL;
+	/* Empty options list */
+	if (*optionsHead == NULL){
+		*optionsHead = opt;
 		return; 
 	}
-	OPTION_ITEM *current = head;
+	OPTION_ITEM *current = *optionsHead;
 	while (current != NULL){
+		/* Check for duplicate option */
 		if (!strcmp(current->option, opt->option)){
-			strcpy(current->content, opt->content);
-			return; // Duplicate option found
+			current->content = opt->content;
+			return;
 		}
 		if (current->next == NULL){
 			current->next = opt;
-			return; 
+			return;
 		}
-		current = current->next; 
-	}	
+		current = current->next;
+	}
 }
 
-/* Check if String s begins with the given prefix */
-int startsWith(const char *s, const char *prefix) {
-	if (strncmp(s, prefix, strlen(prefix)) == 0){
-		return 1; 
+/* Free the entire option list */
+void freeOptionList(POPTION_ITEM optionsHead){
+	OPTION_ITEM *current = optionsHead; 
+	OPTION_ITEM *temp; 
+	while (current != NULL){
+		temp = current; 
+		current = current->next; 
+		free(temp);
 	}
-	else {
-		return 0;
+	current = NULL; 
+}
+
+char *serializeRtspMessage(PRTSP_MESSAGE msg, int *serializedLength){
+	int size = getMessageLength(msg);
+	char *serializedMessage = malloc(size);
+	if (msg->type == TYPE_REQUEST){
+		/* command [space] */
+		strcpy(serializedMessage, msg->message.request.command); 
+		strcat(serializedMessage, " ");
+		/* target [space] */
+		strcat(serializedMessage, msg->message.request.target);
+		strcat(serializedMessage, " ");
+		/* protocol \r\n */ 
+		strcat(serializedMessage, msg->protocol);
+		strcat(serializedMessage, "\r\n");		 
+	} else {
+		/* protocol [space] */ 
+		strcpy(serializedMessage, msg->protocol);
+		strcat(serializedMessage, " ");
+		/* status code [space] */ 
+		char *statusCodeStr = malloc(sizeof(int));
+		sprintf(statusCodeStr, "%d", msg->message.response.statusCode);
+		strcat(serializedMessage, statusCodeStr);
+		strcat(serializedMessage, " ");
+		/* status str\r\n */ 
+		strcat(serializedMessage, msg->message.response.statusString);
+		strcat(serializedMessage, "\r\n");
 	}
+	/* option content\r\n */
+	POPTION_ITEM current = msg->options;
+	while (current != NULL){
+		strcat(serializedMessage, current->option); 
+		strcat(serializedMessage, ": ");
+		strcat(serializedMessage, current->content);
+		strcat(serializedMessage, "\r\n");
+		current = current->next; 
+	}
+	serializedLength = strlen(serializedMessage) + 1; 
+	return serializedMessage;
+}
+
+void freeMessage(PRTSP_MESSAGE msg){
+	
 }
 
 int main() {
 	struct _RTSP_MESSAGE msg;
-	parseRTSPRequest(&msg, TEST_REQUEST);
+	parseRTSPRequest(&msg, TEST_RESPONSE);
 	printf("Done");
 	getchar(0);
 }
