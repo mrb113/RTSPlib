@@ -6,6 +6,8 @@
 #define TYPE_REQUEST 0
 #define TYPE_RESPONSE 1
 
+#define TOKEN_OPTION 0
+
 #define RTSP_ERROR_SUCCESS 0
 #define RTSP_ERROR_NO_MEMORY -1
 #define RTSP_ERROR_MALFORMED -2
@@ -13,7 +15,7 @@
 #define SEQ_INVALID -1
 
 #define FLAG_ALLOCATED_OPTION_FIELDS 0x1
-#define FLAG_ALLOCATED_MESSAGE 0x2
+#define FLAG_ALLOCATED_MESSAGE_BUFFER 0x2
 #define FLAG_ALLOCATED_OPTION_ITEMS 0x4
 
 /* Linked List to store the options */
@@ -26,8 +28,8 @@ typedef struct _OPTION_ITEM {
 
 /* RTSP Message *
 * In this implementation, a flag indicates the message type:
-* 0 = request
-* 1 = response */
+* TYPE_REQUEST = 0
+* TYPE_RESPONSE = 1 */
 typedef struct _RTSP_MESSAGE {
 	char type;
 	char flags;
@@ -39,12 +41,12 @@ typedef struct _RTSP_MESSAGE {
 
 	union {
 		struct {
-			// Request fields
+			/* Request fields */
 			char *command;
 			char *target;
 		} request;
 		struct {
-			// Response fields
+			/* Response fields */ 
 			char *payload;
 			char *statusString;
 			int statusCode;
@@ -54,9 +56,9 @@ typedef struct _RTSP_MESSAGE {
 
 int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage);
 void freeMessage(PRTSP_MESSAGE msg);
-void createRtspResponse(PRTSP_MESSAGE msg, char* message, int flags, char *protocol, int statusCode, char *statusString, int sequenceNumber, POPTION_ITEM optionsHead);
-void createRtspRequest(PRTSP_MESSAGE msg, char* message, int flags, char *command, char *target, char *protocol, int sequenceNumber, POPTION_ITEM optionsHead);
-char *getOptionContent(POPTION_ITEM optionsHead, char option);
+void createRtspResponse(PRTSP_MESSAGE msg, char* messageBuffer, int flags, char *protocol, int statusCode, char *statusString, int sequenceNumber, POPTION_ITEM optionsHead);
+void createRtspRequest(PRTSP_MESSAGE msg, char* messageBuffer, int flags, char *command, char *target, char *protocol, int sequenceNumber, POPTION_ITEM optionsHead);
+char *getOptionContent(POPTION_ITEM optionsHead, char *option);
 void insertOption(POPTION_ITEM *optionsHead, POPTION_ITEM opt);
 void freeOptionList(POPTION_ITEM optionsHead);
-char *serializeRtspMessage(PRTSP_MESSAGE msg);
+char *serializeRtspMessage(PRTSP_MESSAGE msg, int *serializedLength);
