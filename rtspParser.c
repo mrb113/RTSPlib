@@ -12,6 +12,7 @@ static int startsWith(const char *s, const char *prefix) {
 
 /* Gets the length of the message */
 static int getMessageLength(PRTSP_MESSAGE msg){
+	POPTION_ITEM current;
 	int count = 1; 
 	count += strlen(msg->protocol);
 	if (msg->type == TYPE_REQUEST){
@@ -29,7 +30,7 @@ static int getMessageLength(PRTSP_MESSAGE msg){
 		count += 4; 
 	}
 
-	POPTION_ITEM current = msg->options; 
+	current = msg->options;
 	while (current != NULL){
 		count += strlen(msg->options->option);
 		count += strlen(msg->options->content);
@@ -41,20 +42,24 @@ static int getMessageLength(PRTSP_MESSAGE msg){
 }
 
 /* Given an RTSP message string, parse it into an RTSP_MESSAGE struct */
-int parseRTSPRequest(PRTSP_MESSAGE msg, char *rtspMessage) {
-	char *token, *protocol, *target, *statusStr, *command, flag;
-	int statusCode, exitCode;
+int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
+	char *token, *protocol, *target, *statusStr, *command, *sequence, flag;
+	int statusCode, exitCode, sequenceNum;
 	POPTION_ITEM options = NULL;
+	POPTION_ITEM newOpt; 
+	char *delim = " \r\n";
+	char *end = "\r\n";
+	char *optDelim = " :\r\n";
+	char typeFlag = TOKEN_OPTION;
+	char *content, *opt = NULL;
+
 	char *messageBuffer = malloc((strlen(rtspMessage) + 1) * sizeof(*rtspMessage));
 	if (messageBuffer == NULL) {
 		exitCode = RTSP_ERROR_NO_MEMORY;
 		goto ExitFailure;
 	}
 	/* Tokenize the message string */
-	strcpy(messageBuffer, rtspMessage);
-	char* delim = " \r\n";
-	char* end = "\r\n"; 
-	char* optDelim = " :\r\n";
+	strcpy(messageBuffer, rtspMessage);	
 	 
 	/* Get the first token */
 	token = strtok(messageBuffer, delim);
@@ -113,8 +118,6 @@ int parseRTSPRequest(PRTSP_MESSAGE msg, char *rtspMessage) {
 	}
 
 	/* Parse remaining options */
-	char typeFlag = TOKEN_OPTION; 
-	char *content, *opt = NULL;
 	while (token != NULL){
 		token = strtok(NULL, optDelim);
 		if (token != NULL){
@@ -125,7 +128,7 @@ int parseRTSPRequest(PRTSP_MESSAGE msg, char *rtspMessage) {
 			else { 
 				content = token;
 				/* Create a new node containing the option and content */
-				POPTION_ITEM newOpt = (POPTION_ITEM)malloc(sizeof(OPTION_ITEM));
+				newOpt = (POPTION_ITEM)malloc(sizeof(OPTION_ITEM));
 				if (newOpt == NULL){
 					freeOptionList(options);
 					exitCode = RTSP_ERROR_NO_MEMORY;
@@ -140,9 +143,8 @@ int parseRTSPRequest(PRTSP_MESSAGE msg, char *rtspMessage) {
 		}
 		typeFlag ^= 1; // flip the flag
 	}
-	int sequenceNum;
 	/* Get sequence number */
-	char *sequence = getOptionContent(options, "CSeq"); 
+	sequence = getOptionContent(options, "CSeq"); 
 	if (sequence != NULL) {
 		sequenceNum = atoi(sequence);
 	}
@@ -211,13 +213,14 @@ char *getOptionContent(POPTION_ITEM optionsHead, char *option){
 
 /* Adds new option opt to the struct's option list */
 void insertOption(POPTION_ITEM *optionsHead, POPTION_ITEM opt){
+	OPTION_ITEM *current = *optionsHead;
 	opt->next = NULL;
+
 	/* Empty options list */
 	if (*optionsHead == NULL){
 		*optionsHead = opt;
 		return; 
 	}
-	OPTION_ITEM *current = *optionsHead;
 	/* Traverse the list and insert the new option at the end */
 	while (current != NULL){
 		/* Check for duplicate option; if so, replace the option currently there */
@@ -252,6 +255,9 @@ void freeOptionList(POPTION_ITEM optionsHead){
 char *serializeRtspMessage(PRTSP_MESSAGE msg, int *serializedLength){
 	int size = getMessageLength(msg);
 	char *serializedMessage = malloc(size);
+	POPTION_ITEM current = msg->options;
+	char *statusCodeStr = malloc(sizeof(int));
+
 	if (msg->type == TYPE_REQUEST){
 		/* command [space] */
 		strcpy(serializedMessage, msg->message.request.command); 
@@ -267,7 +273,6 @@ char *serializeRtspMessage(PRTSP_MESSAGE msg, int *serializedLength){
 		strcpy(serializedMessage, msg->protocol);
 		strcat(serializedMessage, " ");
 		/* status code [space] */ 
-		char *statusCodeStr = malloc(sizeof(int));
 		sprintf(statusCodeStr, "%d", msg->message.response.statusCode);
 		strcat(serializedMessage, statusCodeStr);
 		strcat(serializedMessage, " ");
@@ -276,7 +281,6 @@ char *serializeRtspMessage(PRTSP_MESSAGE msg, int *serializedLength){
 		strcat(serializedMessage, "\r\n");
 	}
 	/* option content\r\n */
-	POPTION_ITEM current = msg->options;
 	while (current != NULL){
 		strcat(serializedMessage, current->option); 
 		strcat(serializedMessage, ": ");
