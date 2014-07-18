@@ -5,3 +5,5 @@ Debug/
 *.suo
 *.vcxproj
 *.filters
+Release/
+RTSPlib.vcxproj.user
