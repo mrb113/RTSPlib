@@ -13,14 +13,19 @@ static int startsWith(const char *s, const char *prefix) {
 /* Gets the length of the message */
 static int getMessageLength(PRTSP_MESSAGE msg){
 	POPTION_ITEM current;
+	/* Initialize to 1 for null terminator */
 	int count = 1; 
+	/* Add the length of the protocol */
 	count += strlen(msg->protocol);
+
+	/* Add length of request-specific strings */
 	if (msg->type == TYPE_REQUEST){
 		count += strlen(msg->message.request.command);
 		count += strlen(msg->message.request.target);
-		/* Add 2 for the two spaces */
-		count += 2;
+		/* Add 4 for the two spaces and \r\n*/
+		count += 4;
 	}
+	/* Add length of response-specific strings */
 	else {
 		char *statusCodeStr = malloc(sizeof(int));
 		sprintf(statusCodeStr, "%d", msg->message.response.statusCode);
@@ -29,29 +34,39 @@ static int getMessageLength(PRTSP_MESSAGE msg){
 		/* Two spaces and \r\n */
 		count += 4; 
 	}
-
+	/* Count the size of the options */
 	current = msg->options;
 	while (current != NULL){
-		count += strlen(msg->options->option);
-		count += strlen(msg->options->content);
-		/* Add 4 because of : and \r\n */
+		count += strlen(current->option);
+		count += strlen(current->content);
+		/* Add 5 because of :[space] and \r\n */
 		count += 4; 
 		current = current->next; 
 	}
+	/* Add 2 more for extra /r/n ending */
+	count += 2;
+
+	/* Add the length of the payload, if any */
+	if (msg->payload != NULL)
+		count += strlen(msg->payload);
+
 	return count; 
 }
 
 /* Given an RTSP message string, parse it into an RTSP_MESSAGE struct */
 int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
-	char *token, *protocol, *target, *statusStr, *command, *sequence, flag;
-	int statusCode, exitCode, sequenceNum;
+	char *token, *protocol, *endCheck, *target, *statusStr, *command, *sequence, flag;
+	char *content, *payload = NULL, *opt = NULL;
+	int statusCode, sequenceNum, offset;
+	int exitCode;
 	POPTION_ITEM options = NULL;
 	POPTION_ITEM newOpt; 
+	char messageEnded = 0; 
 	char *delim = " \r\n";
 	char *end = "\r\n";
+	char *messageEnd = "\r\n\r\n";
 	char *optDelim = " :\r\n";
 	char typeFlag = TOKEN_OPTION;
-	char *content, *opt = NULL;
 
 	char *messageBuffer = malloc((strlen(rtspMessage) + 1) * sizeof(*rtspMessage));
 	if (messageBuffer == NULL) {
@@ -116,11 +131,13 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 		exitCode = RTSP_ERROR_MALFORMED; 
 		goto ExitFailure; 
 	}
-
 	/* Parse remaining options */
 	while (token != NULL){
+
 		token = strtok(NULL, optDelim);
-		if (token != NULL){
+		if (token != NULL){			
+
+			/* The token is an option */
 			if (typeFlag == TOKEN_OPTION){ 
 				opt = token;
 			}
@@ -138,11 +155,33 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 				newOpt->option = opt;
 				newOpt->content = token;
 				newOpt->next = NULL;
-				insertOption(&options, newOpt);		
+				insertOption(&options, newOpt);	
+
+				/* Check if we're at the end of the message portion */
+				offset = &token[0] + strlen(token) + 1;
+				endCheck = offset;
+
+				/* The first \r is missing because it's been tokenized */ 
+				if (startsWith(endCheck, "\n\r\n")){
+					/* We've encountered the end of the message */
+					messageEnded = 1; 
+					/* The payload is the remainder of the message. If none, then payload = null */
+					if (endCheck[3] != '\0')
+						payload = &endCheck[3];
+
+					break; 
+				}
 			}
 		}
 		typeFlag ^= 1; // flip the flag
 	}
+	/* If we never encountered the double CRLF, then the message is malformed! */
+	if (!messageEnded){
+		printf("Malformed");
+		exitCode = RTSP_ERROR_MALFORMED; 
+		goto ExitFailure; 
+	}
+
 	/* Get sequence number */
 	sequence = getOptionContent(options, "CSeq"); 
 	if (sequence != NULL) {
@@ -153,10 +192,10 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 	}
 	/* Package the new parsed message into the struct */
 	if (flag == TYPE_REQUEST){
-		createRtspRequest(msg, messageBuffer, FLAG_ALLOCATED_MESSAGE_BUFFER | FLAG_ALLOCATED_OPTION_ITEMS, command, target, protocol, sequenceNum, options);
+		createRtspRequest(msg, messageBuffer, FLAG_ALLOCATED_MESSAGE_BUFFER | FLAG_ALLOCATED_OPTION_ITEMS, command, target, protocol, sequenceNum, options, payload);
 	}
 	else {
-		createRtspResponse(msg, messageBuffer, FLAG_ALLOCATED_MESSAGE_BUFFER | FLAG_ALLOCATED_OPTION_ITEMS, protocol, statusCode, statusStr, sequenceNum, options);
+		createRtspResponse(msg, messageBuffer, FLAG_ALLOCATED_MESSAGE_BUFFER | FLAG_ALLOCATED_OPTION_ITEMS, protocol, statusCode, statusStr, sequenceNum, options, payload);
 	}
 	return RTSP_ERROR_SUCCESS;
 
@@ -173,12 +212,13 @@ ExitFailure:
 
 /* Create new RTSP message struct with response data */
 void createRtspResponse(PRTSP_MESSAGE msg, char *message, int flags, char *protocol, 
-	int statusCode, char *statusString, int sequenceNumber, POPTION_ITEM optionsHead) {	
+	int statusCode, char *statusString, int sequenceNumber, POPTION_ITEM optionsHead, char *payload) {	
 	msg->type = TYPE_RESPONSE;
 	msg->flags = flags;
 	msg->messageBuffer = message;
 	msg->protocol = protocol;
 	msg->options = optionsHead;
+	msg->payload = payload; 
 	msg->sequenceNumber = sequenceNumber;
 	msg->message.response.statusString = statusString;
 	msg->message.response.statusCode = statusCode;
@@ -186,12 +226,13 @@ void createRtspResponse(PRTSP_MESSAGE msg, char *message, int flags, char *proto
 
 /* Create new RTSP message struct with request data */
 void createRtspRequest(PRTSP_MESSAGE msg, char *message, int flags, 
-	char *command, char *target, char *protocol, int sequenceNumber, POPTION_ITEM optionsHead) {
+	char *command, char *target, char *protocol, int sequenceNumber, POPTION_ITEM optionsHead, char *payload) {
 	msg->type = TYPE_REQUEST;
 	msg->flags = flags;
 	msg->protocol = protocol; 
 	msg->messageBuffer = message;
 	msg->options = optionsHead;
+	msg->payload = payload;
 	msg->sequenceNumber = sequenceNumber;
 	msg->message.request.command = command; 
 	msg->message.request.target = target;
