@@ -13,6 +13,7 @@ static int startsWith(const char *s, const char *prefix) {
 /* Gets the length of the message */
 static int getMessageLength(PRTSP_MESSAGE msg){
 	POPTION_ITEM current;
+
 	/* Initialize to 1 for null terminator */
 	int count = 1; 
 	/* Add the length of the protocol */
@@ -31,7 +32,7 @@ static int getMessageLength(PRTSP_MESSAGE msg){
 		sprintf(statusCodeStr, "%d", msg->message.response.statusCode);
 		count += strlen(statusCodeStr);
 		count += strlen(msg->message.response.statusString);
-		/* Two spaces and \r\n */
+		/* Add 4 for two spaces and \r\n */
 		count += 4; 
 	}
 	/* Count the size of the options */
@@ -39,7 +40,7 @@ static int getMessageLength(PRTSP_MESSAGE msg){
 	while (current != NULL){
 		count += strlen(current->option);
 		count += strlen(current->content);
-		/* Add 5 because of :[space] and \r\n */
+		/* Add 4 because of :[space] and \r\n */
 		count += 4; 
 		current = current->next; 
 	}
@@ -53,30 +54,29 @@ static int getMessageLength(PRTSP_MESSAGE msg){
 	return count; 
 }
 
-/* Given an RTSP message string, parse it into an RTSP_MESSAGE struct */
+/* Given an RTSP message string rtspMessage, parse it into an RTSP_MESSAGE struct msg */
 int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
-	char *token, *protocol, *endCheck, *target, *statusStr, *command, *sequence, flag;
-	char *content, *payload = NULL, *opt = NULL;
-	int statusCode, sequenceNum, offset;
-	int exitCode;
+	char *token, *protocol, *endCheck, *target, *statusStr, *command, *sequence, *content, flag;
+	char messageEnded = 0, *payload = NULL, *opt = NULL;
+	int statusCode, sequenceNum, exitCode; 
 	POPTION_ITEM options = NULL;
 	POPTION_ITEM newOpt; 
-	char messageEnded = 0; 
+
+	/* Delimeter sets for strtok() */
 	char *delim = " \r\n";
 	char *end = "\r\n";
-	char *messageEnd = "\r\n\r\n";
 	char *optDelim = " :\r\n";
 	char typeFlag = TOKEN_OPTION;
 
+	/* Put the raw message into a string we can use */
 	char *messageBuffer = malloc((strlen(rtspMessage) + 1) * sizeof(*rtspMessage));
 	if (messageBuffer == NULL) {
 		exitCode = RTSP_ERROR_NO_MEMORY;
 		goto ExitFailure;
 	}
-	/* Tokenize the message string */
 	strcpy(messageBuffer, rtspMessage);	
 	 
-	/* Get the first token */
+	/* Get the first token of the message*/
 	token = strtok(messageBuffer, delim);
 	if (token == NULL){
 		exitCode = RTSP_ERROR_MALFORMED; 
@@ -86,6 +86,7 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 	/* The message is a response */
 	if (startsWith(token, "RTSP")){
 		flag = TYPE_RESPONSE; 
+		/* The current token is the protocol */
 		protocol = token;
 
 		/* Get the status code */
@@ -110,6 +111,7 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 	/* The message is a request */
 	else {		
 		flag = TYPE_REQUEST; 
+		/* The current token is the command */
 		command = token; 
 		/* Get the target */
 		target = strtok(NULL, delim);
@@ -133,7 +135,6 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 	}
 	/* Parse remaining options */
 	while (token != NULL){
-
 		token = strtok(NULL, optDelim);
 		if (token != NULL){			
 
@@ -157,15 +158,17 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 				newOpt->next = NULL;
 				insertOption(&options, newOpt);	
 
-				/* Check if we're at the end of the message portion */
-				offset = &token[0] + strlen(token) + 1;
-				endCheck = offset;
+				/* Check if we're at the end of the message portion marked by \r\n\r\n 
+				 * endCheck points to the remainder of messageBuffer after the token */ 
+				endCheck = &token[0] + strlen(token) + 1;
 
-				/* The first \r is missing because it's been tokenized */ 
+				/* See if we've hit the end of the message. The first \r is missing because it's been tokenized */ 
 				if (startsWith(endCheck, "\n\r\n")){
-					/* We've encountered the end of the message */
+
+					/* We've encountered the end of the message - mark it thus */
 					messageEnded = 1; 
-					/* The payload is the remainder of the message. If none, then payload = null */
+
+					/* The payload is the remainder of messageBuffer. If none, then payload = null */
 					if (endCheck[3] != '\0')
 						payload = &endCheck[3];
 
@@ -177,12 +180,11 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char *rtspMessage) {
 	}
 	/* If we never encountered the double CRLF, then the message is malformed! */
 	if (!messageEnded){
-		printf("Malformed");
 		exitCode = RTSP_ERROR_MALFORMED; 
 		goto ExitFailure; 
 	}
 
-	/* Get sequence number */
+	/* Get sequence number as an integer */
 	sequence = getOptionContent(options, "CSeq"); 
 	if (sequence != NULL) {
 		sequenceNum = atoi(sequence);
@@ -329,6 +331,12 @@ char *serializeRtspMessage(PRTSP_MESSAGE msg, int *serializedLength){
 		strcat(serializedMessage, "\r\n");
 		current = current->next; 
 	}
+	/* Final \r\n */
+	strcat(serializedMessage, "\r\n");
+
+	/* payload */
+	strcat(serializedMessage, msg->payload);
+
 	*serializedLength = strlen(serializedMessage) + 1; 
 	return serializedMessage;
 }
@@ -340,7 +348,7 @@ void freeMessage(PRTSP_MESSAGE msg){
 		free(msg->messageBuffer);
 	}
 
-	/* If we've allocated any option items*/
+	/* If we've allocated any option items */
 	if (msg->flags & FLAG_ALLOCATED_OPTION_ITEMS){
 		freeOptionList(msg->options); 
 	}
