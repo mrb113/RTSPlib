@@ -9,6 +9,6 @@ https://github.com/moonlight-stream/moonlight-common-c/tree/master/limelight-com
 
 ### If you're looking at this RTSP parser for a reference:
 
-It seems like a fair amount of people come here for a reference to an RTSP parer. I encourage you to look at the RTSP files in Moonlight Common C where it's maintained now instead of this one. I like to leave this repository here anyway.
+It seems like a fair amount of people come here for a reference to an RTSP parser. I hope to one day update this repo, but I encourage you to look at the RTSP files in Moonlight Common C where it's maintained now instead of this one. I like to leave this repository here anyway.
 https://github.com/moonlight-stream/moonlight-common-c/blob/master/limelight-common/RtspParser.c
 
