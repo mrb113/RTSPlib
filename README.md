@@ -1,6 +1,10 @@
 RTSPlib
 =======
 
+**THIS CODE IS PROBABLY BAD. It was my first time writing C. Now I'm a C developer and will probably cringe if I look at the source code.**
+
+
+
 RTSP parser written in C. Alternatively, "why strings in C89 aren't fun".
 https://en.wikipedia.org/wiki/Real_Time_Streaming_Protocol     
 
