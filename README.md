@@ -1,7 +1,7 @@
 RTSPlib
 =======
 
-**THIS CODE IS PROBABLY BAD. It was my first time writing C. Now I'm a C developer and will probably cringe if I look at the source code.**
+**THIS CODE IS PROBABLY BAD. It was basically my first time writing C. Maybe you'll still find this library useful as a reference, though?**
 
 
 
